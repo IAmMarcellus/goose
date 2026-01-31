@@ -1212,7 +1212,27 @@ impl Agent {
                             }
 
                             if let Some(ref usage) = usage {
-                                self.update_session_metrics(&session_config.id, session_config.schedule_id.clone(), usage, false).await?;
+                                let mut usage_for_metrics = usage.clone();
+                                if (usage_for_metrics.usage.input_tokens.is_none()
+                                    || usage_for_metrics.usage.output_tokens.is_none())
+                                    && response.as_ref().is_some()
+                                {
+                                    let _ = usage_for_metrics
+                                        .ensure_tokens(
+                                            &system_prompt,
+                                            conversation_with_moim.messages(),
+                                            response.as_ref().unwrap(),
+                                            &tools,
+                                        )
+                                        .await;
+                                }
+                                self.update_session_metrics(
+                                    &session_config.id,
+                                    session_config.schedule_id.clone(),
+                                    &usage_for_metrics,
+                                    false,
+                                )
+                                .await?;
                             }
 
                             if let Some(response) = response {
