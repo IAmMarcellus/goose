@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -50,13 +50,14 @@ impl GeminiCliProvider {
         })
     }
 
-    /// Execute gemini CLI command with simple text prompt
+    /// Execute gemini CLI command with simple text prompt.
+    /// Uses --output-format json to get token usage from stats.models.
     async fn execute_command(
         &self,
         system: &str,
         messages: &[Message],
         _tools: &[Tool],
-    ) -> Result<Vec<String>, ProviderError> {
+    ) -> Result<String, ProviderError> {
         // Create a simple prompt combining system + conversation
         let mut full_prompt = String::new();
 
@@ -105,9 +106,17 @@ impl GeminiCliProvider {
         if cfg!(windows) {
             let sanitized_prompt = full_prompt.replace("\r\n", "\\n").replace('\n', "\\n");
 
-            cmd.arg("-p").arg(&sanitized_prompt).arg("--yolo");
+            cmd.arg("-p")
+                .arg(&sanitized_prompt)
+                .arg("--yolo")
+                .arg("--output-format")
+                .arg("json");
         } else {
-            cmd.arg("-p").arg(&full_prompt).arg("--yolo");
+            cmd.arg("-p")
+                .arg(&full_prompt)
+                .arg("--yolo")
+                .arg("--output-format")
+                .arg("json");
         }
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -126,17 +135,20 @@ impl GeminiCliProvider {
             .ok_or_else(|| ProviderError::RequestFailed("Failed to capture stdout".to_string()))?;
 
         let mut reader = BufReader::new(stdout);
-        let mut lines = Vec::new();
+        let mut output = String::new();
         let mut line = String::new();
 
         loop {
             line.clear();
             match reader.read_line(&mut line).await {
-                Ok(0) => break, // EOF
+                Ok(0) => break,
                 Ok(_) => {
                     let trimmed = line.trim();
-                    if !trimmed.is_empty() && !trimmed.starts_with("Loaded cached credentials") {
-                        lines.push(trimmed.to_string());
+                    if !trimmed.starts_with("Loaded cached credentials") {
+                        if !output.is_empty() {
+                            output.push('\n');
+                        }
+                        output.push_str(trimmed);
                     }
                 }
                 Err(e) => {
@@ -159,18 +171,31 @@ impl GeminiCliProvider {
             )));
         }
 
-        tracing::debug!(
-            "Gemini CLI executed successfully, got {} lines",
-            lines.len()
-        );
+        tracing::debug!("Gemini CLI executed successfully, got {} bytes", output.len());
 
-        Ok(lines)
+        Ok(output)
     }
 
-    /// Parse simple text response
-    fn parse_response(&self, lines: &[String]) -> Result<(Message, Usage), ProviderError> {
-        // Join all lines into a single response
-        let response_text = lines.join("\n");
+    /// Parse CLI output. With --output-format json we get response text and usage from stats.models.
+    fn parse_response(&self, output: &str) -> Result<(Message, Usage), ProviderError> {
+        let (response_text, usage) = if let Ok(value) = serde_json::from_str::<Value>(output) {
+            if let Some(err) = value.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown Gemini CLI error");
+                return Err(ProviderError::RequestFailed(msg.to_string()));
+            }
+            let text = value
+                .get("response")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let usage = self.usage_from_stats(&value);
+            (text, usage)
+        } else {
+            (output.trim().to_string(), Usage::default())
+        };
 
         if response_text.trim().is_empty() {
             return Err(ProviderError::RequestFailed(
@@ -184,9 +209,35 @@ impl GeminiCliProvider {
             vec![MessageContent::text(response_text)],
         );
 
-        let usage = Usage::default(); // No usage info available for gemini CLI
-
         Ok((message, usage))
+    }
+
+    /// Extract Usage from stats.models.<model>.tokens (prompt, candidates, total).
+    fn usage_from_stats(&self, value: &Value) -> Usage {
+        let models = value
+            .get("stats")
+            .and_then(|s| s.get("models"))
+            .and_then(|m| m.as_object());
+        let Some(models) = models else {
+            return Usage::default();
+        };
+        let tokens = models
+            .get(&self.model.model_name)
+            .or_else(|| models.values().next())
+            .and_then(|m| m.get("tokens"));
+        let Some(t) = tokens else {
+            return Usage::default();
+        };
+        let input_tokens = t.get("prompt").and_then(|v| v.as_u64()).map(|v| v as i32);
+        let output_tokens = t.get("candidates").and_then(|v| v.as_u64()).map(|v| v as i32);
+        let total_tokens = t
+            .get("total")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as i32)
+            .or_else(|| {
+                input_tokens.and_then(|i| output_tokens.map(|o| i + o))
+            });
+        Usage::new(input_tokens, output_tokens, total_tokens)
     }
 
     /// Generate a simple session description without calling subprocess
@@ -287,12 +338,12 @@ impl Provider for GeminiCliProvider {
             ProviderError::RequestFailed(format!("Failed to start request log: {}", e))
         })?;
 
-        let lines = self.execute_command(system, messages, tools).await?;
+        let output = self.execute_command(system, messages, tools).await?;
 
-        let (message, usage) = self.parse_response(&lines)?;
+        let (message, usage) = self.parse_response(&output)?;
 
         let response = json!({
-            "lines": lines.len(),
+            "output_len": output.len(),
             "usage": usage
         });
 
