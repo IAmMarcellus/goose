@@ -51,7 +51,6 @@ impl GeminiCliProvider {
     }
 
     /// Execute gemini CLI command with simple text prompt.
-    /// Uses --output-format json to get token usage from stats.models.
     async fn execute_command(
         &self,
         system: &str,
