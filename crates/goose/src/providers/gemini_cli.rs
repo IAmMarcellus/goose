@@ -180,11 +180,13 @@ impl GeminiCliProvider {
     fn parse_response(&self, output: &str) -> Result<(Message, Usage), ProviderError> {
         let (response_text, usage) = if let Ok(value) = serde_json::from_str::<Value>(output) {
             if let Some(err) = value.get("error") {
-                let msg = err
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown Gemini CLI error");
-                return Err(ProviderError::RequestFailed(msg.to_string()));
+                if !err.is_null() {
+                    let msg = err
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown Gemini CLI error");
+                    return Err(ProviderError::RequestFailed(msg.to_string()));
+                }
             }
             let text = value
                 .get("response")
