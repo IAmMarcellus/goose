@@ -39,12 +39,18 @@ just run-ui                  # start desktop
 cd ui/desktop && npm test    # test UI
 ```
 
+### TUI (goose-tui)
+```bash
+cargo run -p goose-cli-tui   # run ratatui streaming UI (requires TTY)
+```
+
 ## Structure
 ```
 crates/
 ├── goose             # core logic
 ├── goose-bench       # benchmarking
-├── goose-cli         # CLI entry
+├── goose-cli         # CLI entry (binary: goose)
+├── goose-cli-tui     # TUI for CLI streaming (binary: goose-tui)
 ├── goose-server      # backend (binary: goosed)
 ├── goose-mcp         # MCP extensions
 ├── goose-test        # test utilities
@@ -96,7 +102,8 @@ Never: Merge without ./scripts/clippy-lint.sh
 Never: Comment self-evident operations (`// Initialize`, `// Return result`), getters/setters, constructors, or standard Rust idioms
 
 ## Entry Points
-- CLI: crates/goose-cli/src/main.rs
+- CLI: crates/goose-cli/src/main.rs (binary: goose)
+- TUI: crates/goose-cli-tui/src/main.rs (binary: goose-tui, ratatui streaming UI)
 - Server: crates/goose-server/src/main.rs
 - UI: ui/desktop/src/main.ts
 - Agent: crates/goose/src/agents/agent.rs

@@ -236,15 +236,18 @@ pub fn start_stream_markdown() -> StreamMarkdownHandle {
 
 impl StreamMarkdownHandle {
     pub async fn send_chunk(&self, text: &str) {
-        let _ = self.tx.send(StreamMarkdownCmd::Chunk(text.to_string())).await;
+        let _ = self
+            .tx
+            .send(StreamMarkdownCmd::Chunk(text.to_string()))
+            .await;
     }
 
     pub async fn flush_and_drop(self) -> std::io::Result<()> {
         let _ = self.tx.send(StreamMarkdownCmd::Flush).await;
         drop(self.tx);
-        self.join.await.map_err(|e| {
-            std::io::Error::other(format!("stream markdown task join: {}", e))
-        })?
+        self.join
+            .await
+            .map_err(|e| std::io::Error::other(format!("stream markdown task join: {}", e)))?
     }
 }
 
@@ -467,8 +470,20 @@ mod tests {
         handle.flush_and_drop().await.unwrap();
         let buf = out.lock().unwrap();
         let s = String::from_utf8_lossy(&buf);
-        assert!(s.contains("1.") && s.contains("First"), "expected '1. First': {:?}", s);
-        assert!(s.contains("2.") && s.contains("Second"), "expected '2. Second': {:?}", s);
-        assert!(s.contains("3.") && s.contains("Third"), "expected '3. Third': {:?}", s);
+        assert!(
+            s.contains("1.") && s.contains("First"),
+            "expected '1. First': {:?}",
+            s
+        );
+        assert!(
+            s.contains("2.") && s.contains("Second"),
+            "expected '2. Second': {:?}",
+            s
+        );
+        assert!(
+            s.contains("3.") && s.contains("Third"),
+            "expected '3. Third': {:?}",
+            s
+        );
     }
 }

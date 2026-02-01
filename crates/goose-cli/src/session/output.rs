@@ -19,6 +19,38 @@ use std::time::{Duration, Instant};
 
 pub const DEFAULT_MIN_PRIORITY: f32 = 0.0;
 
+/// Pluggable output sink for stream chunks and thinking indicator.
+/// When set (e.g. by goose-cli-tui), output is routed here instead of stdout.
+pub trait OutputSink: Send {
+    fn write_stream_chunk(&self, text: &str);
+    fn show_thinking(&self);
+    fn set_thinking_message(&self, msg: &str);
+    fn hide_thinking(&self);
+    fn print_stream_start(&self);
+    fn append_content(&self, text: &str);
+}
+
+thread_local! {
+    static OUTPUT_SINK: RefCell<Option<Box<dyn OutputSink>>> = const { RefCell::new(None) };
+}
+
+/// Set the active output sink. When `Some`, output goes to the sink; when `None`, stdout is used.
+pub fn set_output_sink(sink: Option<Box<dyn OutputSink>>) {
+    OUTPUT_SINK.with(|s| *s.borrow_mut() = sink);
+}
+
+/// Returns true when output is routed to a sink (e.g. TUI) instead of stdout.
+pub fn is_using_sink() -> bool {
+    OUTPUT_SINK.with(|s| s.borrow().is_some())
+}
+
+fn with_sink<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&dyn OutputSink) -> R,
+{
+    OUTPUT_SINK.with(|s| s.borrow().as_deref().map(f))
+}
+
 #[derive(Default)]
 pub struct RenderContext {
     request_id_to_tool_name: HashMap<String, String>,
@@ -201,6 +233,9 @@ thread_local! {
 }
 
 pub fn show_thinking() {
+    if with_sink(|s| s.show_thinking()).is_some() {
+        return;
+    }
     if std::io::stdout().is_terminal() {
         THINKING.with(|t| t.borrow_mut().show());
         THINKING_SHOWN_AT.with(|t| *t.borrow_mut() = Some(Instant::now()));
@@ -209,6 +244,9 @@ pub fn show_thinking() {
 }
 
 pub fn hide_thinking() {
+    if with_sink(|s| s.hide_thinking()).is_some() {
+        return;
+    }
     if std::io::stdout().is_terminal() {
         THINKING.with(|t| t.borrow_mut().hide());
     }
@@ -246,6 +284,9 @@ pub fn is_showing_thinking() -> bool {
 }
 
 pub fn set_thinking_message(s: &String) {
+    if with_sink(|sink| sink.set_thinking_message(s)).is_some() {
+        return;
+    }
     if std::io::stdout().is_terminal() {
         THINKING.with(|t| {
             if let Some(spinner) = t.borrow_mut().spinner.as_mut() {
@@ -282,6 +323,15 @@ pub fn print_section_separator() {
 }
 
 pub fn render_message(message: &Message, debug: bool, context: Option<&RenderContext>) {
+    if OUTPUT_SINK.with(|s| s.borrow().as_ref().is_some()) {
+        let md = super::export::message_to_markdown(message, false);
+        with_sink(|sink| {
+            sink.append_content(&md);
+            sink.append_content("\n");
+        });
+        return;
+    }
+
     let theme = get_theme();
 
     if std::io::stdout().is_terminal() {
@@ -372,6 +422,9 @@ pub fn render_text_no_newlines(text: &str, color: Option<Color>, dim: bool) {
 }
 
 pub fn print_stream_start() {
+    if with_sink(|s| s.print_stream_start()).is_some() {
+        return;
+    }
     if std::io::stdout().is_terminal() {
         println!("\n{}", style("Assistant:").green().dim());
     }
@@ -379,6 +432,9 @@ pub fn print_stream_start() {
 
 pub fn print_stream_chunk(text: &str) {
     if text.is_empty() {
+        return;
+    }
+    if with_sink(|s| s.write_stream_chunk(text)).is_some() {
         return;
     }
     if !std::io::stdout().is_terminal() {

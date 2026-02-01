@@ -28,6 +28,7 @@ use goose::permission::Permission;
 use goose::permission::PermissionConfirmation;
 use goose::providers::base::Provider;
 use goose::utils::safe_truncate;
+pub use output::{set_output_sink, OutputSink};
 
 use anyhow::{Context, Result};
 use completion::GooseCompleter;
@@ -425,6 +426,46 @@ impl CliSession {
         self.push_message(message);
         self.process_agent_response(false, cancel_token).await?;
         Ok(())
+    }
+
+    /// Run one turn: push a user message and process the agent response.
+    /// Used by goose-cli-tui when output sink is set; caller must set the sink before calling.
+    pub async fn run_one_turn(
+        &mut self,
+        user_content: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<()> {
+        self.push_message(Message::user().with_text(user_content));
+
+        if let Err(e) = crate::project_tracker::update_project_tracker(
+            Some(user_content),
+            Some(&self.session_id),
+        ) {
+            eprintln!(
+                "Warning: Failed to update project tracker with instruction: {}",
+                e
+            );
+        }
+
+        let _provider = self.agent.provider().await?;
+
+        output::run_status_hook("thinking");
+        output::show_thinking();
+        let start_time = Instant::now();
+        let result = self
+            .process_agent_response(true, cancel_token.clone())
+            .await;
+        output::hide_thinking();
+
+        if result.is_ok() && !output::is_using_sink() {
+            let elapsed_str = format_elapsed_time(start_time.elapsed());
+            println!(
+                "\n{}",
+                console::style(format!("⏱️  Elapsed time: {}", elapsed_str)).dim()
+            );
+        }
+
+        result
     }
 
     /// Start an interactive session, optionally with an initial message
@@ -1066,6 +1107,7 @@ impl CliSession {
                                                 had_streaming_chunks = true;
                                                 if stream_markdown.is_none()
                                                     && stream_markdown::use_stream_markdown()
+                                                    && !output::is_using_sink()
                                                 {
                                                     stream_markdown =
                                                         Some(stream_markdown::start_stream_markdown());
