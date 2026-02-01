@@ -935,15 +935,8 @@ impl CliSession {
         let is_text_mode = !is_json_mode && !is_stream_json_mode;
         let mut streamed_text = String::new();
         let mut had_streaming_chunks = false;
-        let mut stream_markdown: Option<stream_markdown::StreamMarkdown> = None;
+        let mut stream_markdown: Option<stream_markdown::StreamMarkdownHandle> = None;
         let mut render_context = output::RenderContext::default();
-
-        fn flush_and_drop_stream_markdown(sm: &mut Option<stream_markdown::StreamMarkdown>) {
-            if let Some(ref mut s) = sm {
-                let _ = s.flush();
-            }
-            *sm = None;
-        }
 
         fn flush_streamed_text(
             streamed_text: &mut String,
@@ -971,7 +964,7 @@ impl CliSession {
                         }
                         Some(Ok(AgentEvent::Message(message))) => {
                             if let Some((id, security_prompt)) = find_tool_confirmation(&message) {
-                                flush_and_drop_stream_markdown(&mut stream_markdown);
+                                stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                                 flush_streamed_text(
                                     &mut streamed_text,
                                     self.debug,
@@ -1001,7 +994,7 @@ impl CliSession {
                                     permission,
                                 }).await;
                             } else if let Some((elicitation_id, elicitation_message, schema)) = find_elicitation_request(&message) {
-                                flush_and_drop_stream_markdown(&mut stream_markdown);
+                                stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                                 flush_streamed_text(
                                     &mut streamed_text,
                                     self.debug,
@@ -1075,18 +1068,18 @@ impl CliSession {
                                                     && stream_markdown::use_stream_markdown()
                                                 {
                                                     stream_markdown =
-                                                        Some(stream_markdown::StreamMarkdown::new());
+                                                        Some(stream_markdown::start_stream_markdown());
                                                 }
                                             }
                                             streamed_text.push_str(&t.text);
-                                            if let Some(ref mut sm) = stream_markdown {
-                                                let _ = sm.push_chunk(&t.text);
+                                            if let Some(ref h) = stream_markdown {
+                                                h.send_chunk(&t.text).await;
                                             } else {
                                                 output::print_stream_chunk(&t.text);
                                             }
                                         }
                                     } else {
-                                        flush_and_drop_stream_markdown(&mut stream_markdown);
+                                        stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                                         flush_streamed_text(
                                             &mut streamed_text,
                                             self.debug,
@@ -1099,7 +1092,7 @@ impl CliSession {
                             }
                         }
                         Some(Ok(AgentEvent::McpNotification((extension_id, notification)))) => {
-                            flush_and_drop_stream_markdown(&mut stream_markdown);
+                            stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                             flush_streamed_text(
                                 &mut streamed_text,
                                 self.debug,
@@ -1117,7 +1110,7 @@ impl CliSession {
                             );
                         }
                         Some(Ok(AgentEvent::HistoryReplaced(updated_conversation))) => {
-                            flush_and_drop_stream_markdown(&mut stream_markdown);
+                            stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                             flush_streamed_text(
                                 &mut streamed_text,
                                 self.debug,
@@ -1127,7 +1120,7 @@ impl CliSession {
                             self.messages = updated_conversation;
                         }
                         Some(Ok(AgentEvent::ModelChange { model, mode })) => {
-                            flush_and_drop_stream_markdown(&mut stream_markdown);
+                            stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                             flush_streamed_text(
                                 &mut streamed_text,
                                 self.debug,
@@ -1141,7 +1134,7 @@ impl CliSession {
                             }
                         }
                         Some(Err(e)) => {
-                            flush_and_drop_stream_markdown(&mut stream_markdown);
+                            stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                             flush_streamed_text(
                                 &mut streamed_text,
                                 self.debug,
@@ -1167,7 +1160,7 @@ impl CliSession {
                     }
                 }
                 _ = cancel_token_clone.cancelled() => {
-                    flush_and_drop_stream_markdown(&mut stream_markdown);
+                    stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                     flush_streamed_text(
                         &mut streamed_text,
                         self.debug,
@@ -1220,7 +1213,7 @@ impl CliSession {
                 .and_then(|s| s.total_tokens);
             emit_stream_event(&StreamEvent::Complete { total_tokens });
         } else {
-            flush_and_drop_stream_markdown(&mut stream_markdown);
+            stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
             flush_streamed_text(
                 &mut streamed_text,
                 self.debug,

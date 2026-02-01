@@ -3,6 +3,23 @@ use std::sync::{Arc, Mutex};
 use streamdown_parser::ParseEvent;
 use streamdown_parser::Parser;
 use streamdown_render::{RenderStyle, Renderer};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+
+/// Channel capacity 1 so send_chunk().await yields after each chunk, letting the render task run
+/// and produce output incrementally instead of batching many chunks.
+const STREAM_MARKDOWN_CHANNEL_CAP: usize = 1;
+
+#[derive(Debug)]
+pub enum StreamMarkdownCmd {
+    Chunk(String),
+    Flush,
+}
+
+pub struct StreamMarkdownHandle {
+    tx: mpsc::Sender<StreamMarkdownCmd>,
+    join: JoinHandle<std::io::Result<()>>,
+}
 
 /// Writer that appends to a shared buffer so we can reuse one Renderer (and its list state) across lines.
 struct SharedWriter(Arc<Mutex<Vec<u8>>>);
@@ -185,6 +202,55 @@ impl StreamMarkdown {
 impl Default for StreamMarkdown {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub(crate) async fn run_stream_markdown_task(
+    mut sm: StreamMarkdown,
+    mut rx: mpsc::Receiver<StreamMarkdownCmd>,
+) -> std::io::Result<()> {
+    while let Some(cmd) = rx.recv().await {
+        match cmd {
+            StreamMarkdownCmd::Chunk(s) => {
+                if let Err(e) = sm.push_chunk(&s) {
+                    tracing::warn!("stream markdown push_chunk: {}", e);
+                }
+            }
+            StreamMarkdownCmd::Flush => {
+                if let Err(e) = sm.flush() {
+                    tracing::warn!("stream markdown flush: {}", e);
+                }
+            }
+        }
+    }
+    let _ = sm.flush();
+    Ok(())
+}
+
+pub fn start_stream_markdown() -> StreamMarkdownHandle {
+    let (tx, rx) = mpsc::channel(STREAM_MARKDOWN_CHANNEL_CAP);
+    let sm = StreamMarkdown::new();
+    let join = tokio::spawn(async move { run_stream_markdown_task(sm, rx).await });
+    StreamMarkdownHandle { tx, join }
+}
+
+impl StreamMarkdownHandle {
+    pub async fn send_chunk(&self, text: &str) {
+        let _ = self.tx.send(StreamMarkdownCmd::Chunk(text.to_string())).await;
+    }
+
+    pub async fn flush_and_drop(self) -> std::io::Result<()> {
+        let _ = self.tx.send(StreamMarkdownCmd::Flush).await;
+        drop(self.tx);
+        self.join.await.map_err(|e| {
+            std::io::Error::other(format!("stream markdown task join: {}", e))
+        })?
+    }
+}
+
+pub async fn flush_and_drop_handle(handle: &mut Option<StreamMarkdownHandle>) {
+    if let Some(h) = handle.take() {
+        let _ = h.flush_and_drop().await;
     }
 }
 
@@ -372,5 +438,37 @@ mod tests {
         assert!(!s.is_empty());
         assert!(s.contains("Title"));
         assert!(s.contains("\x1b["), "Ansi theme should emit ANSI: {:?}", s);
+    }
+
+    #[tokio::test]
+    async fn handle_send_chunk_and_flush_renders_to_buffer() {
+        let (sm, out) = StreamMarkdown::new_for_test(80);
+        let (tx, rx) = mpsc::channel(STREAM_MARKDOWN_CHANNEL_CAP);
+        let join = tokio::spawn(run_stream_markdown_task(sm, rx));
+        let handle = StreamMarkdownHandle { tx, join };
+        handle.send_chunk("# Hi\n").await;
+        handle.send_chunk("**bold**\n").await;
+        handle.flush_and_drop().await.unwrap();
+        let buf = out.lock().unwrap();
+        let s = String::from_utf8_lossy(&buf);
+        assert!(s.contains("Hi"), "expected 'Hi' in output: {:?}", s);
+        assert!(s.contains("bold"), "expected 'bold' in output: {:?}", s);
+    }
+
+    #[tokio::test]
+    async fn handle_multiple_chunks_then_flush_ordering() {
+        let (sm, out) = StreamMarkdown::new_for_test(80);
+        let (tx, rx) = mpsc::channel(STREAM_MARKDOWN_CHANNEL_CAP);
+        let join = tokio::spawn(run_stream_markdown_task(sm, rx));
+        let handle = StreamMarkdownHandle { tx, join };
+        handle.send_chunk("1. First\n").await;
+        handle.send_chunk("2. Second\n").await;
+        handle.send_chunk("3. Third\n").await;
+        handle.flush_and_drop().await.unwrap();
+        let buf = out.lock().unwrap();
+        let s = String::from_utf8_lossy(&buf);
+        assert!(s.contains("1.") && s.contains("First"), "expected '1. First': {:?}", s);
+        assert!(s.contains("2.") && s.contains("Second"), "expected '2. Second': {:?}", s);
+        assert!(s.contains("3.") && s.contains("Third"), "expected '3. Third': {:?}", s);
     }
 }
