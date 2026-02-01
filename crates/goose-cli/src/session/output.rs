@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::io::{Error, IsTerminal, Write};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const DEFAULT_MIN_PRIORITY: f32 = 0.0;
 
@@ -136,7 +136,12 @@ pub fn get_show_full_tool_output() -> bool {
     SHOW_FULL_TOOL_OUTPUT.with(|s| *s.borrow())
 }
 
-// Simple wrapper around spinner to manage its state
+/// Minimum time the spinner is shown so it doesn't flicker when the first chunk arrives quickly.
+const MIN_SPINNER_DISPLAY: Duration = Duration::from_millis(600);
+
+// Simple wrapper around spinner to manage its state.
+// Spinner runs on the main screen below the conversation so the window never goes blank.
+// It stays visible during streaming (we do not hide when the first chunk arrives).
 #[derive(Default)]
 pub struct ThinkingIndicator {
     spinner: Option<cliclack::ProgressBar>,
@@ -161,6 +166,14 @@ impl ThinkingIndicator {
 
     pub fn hide(&mut self) {
         if let Some(spinner) = self.spinner.take() {
+            THINKING_SHOWN_AT.with(|t| {
+                if let Some(shown_at) = t.take() {
+                    let elapsed = shown_at.elapsed();
+                    if elapsed < MIN_SPINNER_DISPLAY {
+                        std::thread::sleep(MIN_SPINNER_DISPLAY - elapsed);
+                    }
+                }
+            });
             spinner.stop("");
         }
     }
@@ -168,6 +181,10 @@ impl ThinkingIndicator {
     pub fn is_shown(&self) -> bool {
         self.spinner.is_some()
     }
+}
+
+thread_local! {
+    static THINKING_SHOWN_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +203,8 @@ thread_local! {
 pub fn show_thinking() {
     if std::io::stdout().is_terminal() {
         THINKING.with(|t| t.borrow_mut().show());
+        THINKING_SHOWN_AT.with(|t| *t.borrow_mut() = Some(Instant::now()));
+        let _ = std::io::Write::flush(&mut std::io::stdout());
     }
 }
 
