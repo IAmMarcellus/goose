@@ -2,7 +2,7 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::{Arc, Mutex};
 use streamdown_parser::ParseEvent;
 use streamdown_parser::Parser;
-use streamdown_render::Renderer;
+use streamdown_render::{RenderStyle, Renderer};
 
 /// Writer that appends to a shared buffer so we can reuse one Renderer (and its list state) across lines.
 struct SharedWriter(Arc<Mutex<Vec<u8>>>);
@@ -13,6 +13,39 @@ impl Write for SharedWriter {
     }
     fn flush(&mut self) -> io::Result<()> {
         self.0.lock().unwrap().flush()
+    }
+}
+
+/// Bat/syntect theme names used by goose for non-streaming; reused for streamdown code blocks.
+fn syntax_theme_name(theme: crate::session::output::Theme) -> &'static str {
+    match theme {
+        crate::session::output::Theme::Light => "GitHub",
+        crate::session::output::Theme::Dark => "zenburn",
+        crate::session::output::Theme::Ansi => "base16",
+    }
+}
+
+fn render_style_for_theme(theme: crate::session::output::Theme) -> RenderStyle {
+    match theme {
+        crate::session::output::Theme::Light => RenderStyle {
+            bright: "#0969da".to_string(),
+            head: "#1f2328".to_string(),
+            symbol: "#8250df".to_string(),
+            grey: "#656d76".to_string(),
+            dark: "#f6f8fa".to_string(),
+            mid: "#eaeef2".to_string(),
+            light: "#d0d7de".to_string(),
+        },
+        crate::session::output::Theme::Dark => RenderStyle::default(),
+        crate::session::output::Theme::Ansi => RenderStyle {
+            bright: "#6cb6ff".to_string(),
+            head: "#56d364".to_string(),
+            symbol: "#d2a8ff".to_string(),
+            grey: "#8b949e".to_string(),
+            dark: "#0d1117".to_string(),
+            mid: "#161b22".to_string(),
+            light: "#21262d".to_string(),
+        },
     }
 }
 
@@ -37,34 +70,66 @@ pub struct StreamMarkdown {
 
 impl StreamMarkdown {
     pub fn new() -> Self {
-        let width = console::Term::stdout()
-            .size_checked()
-            .map(|(_, w)| w as usize)
-            .unwrap_or(80);
-        let shared_buffer = Arc::new(Mutex::new(Vec::new()));
-        let renderer = Renderer::new(SharedWriter(Arc::clone(&shared_buffer)), width);
+        Self::new_with_theme(crate::session::output::get_theme())
+    }
+
+    fn new_with_theme_impl(
+        width: usize,
+        shared_buffer: Arc<Mutex<Vec<u8>>>,
+        theme: crate::session::output::Theme,
+        #[cfg(test)] test_out: Option<Arc<Mutex<Vec<u8>>>>,
+    ) -> Self {
+        let style = render_style_for_theme(theme);
+        let syntax_name = syntax_theme_name(theme);
+        let mut renderer =
+            Renderer::with_style(SharedWriter(Arc::clone(&shared_buffer)), width, style);
+        renderer.set_theme(syntax_name);
         Self {
             parser: Parser::new(),
             line_buffer: String::new(),
             shared_buffer,
             renderer,
             #[cfg(test)]
-            test_out: None,
+            test_out,
         }
+    }
+
+    fn new_with_theme(theme: crate::session::output::Theme) -> Self {
+        let width = console::Term::stdout()
+            .size_checked()
+            .map(|(_, w)| w as usize)
+            .unwrap_or(80);
+        let shared_buffer = Arc::new(Mutex::new(Vec::new()));
+        Self::new_with_theme_impl(width, shared_buffer, theme, #[cfg(test)] None)
     }
 
     #[cfg(test)]
     pub fn new_for_test(width: usize) -> (Self, Arc<Mutex<Vec<u8>>>) {
         let out = Arc::new(Mutex::new(Vec::new()));
         let shared_buffer = Arc::new(Mutex::new(Vec::new()));
-        let renderer = Renderer::new(SharedWriter(Arc::clone(&shared_buffer)), width);
-        let sm = Self {
-            parser: Parser::new(),
-            line_buffer: String::new(),
+        let theme = crate::session::output::get_theme();
+        let sm = Self::new_with_theme_impl(
+            width,
             shared_buffer,
-            renderer,
-            test_out: Some(Arc::clone(&out)),
-        };
+            theme,
+            Some(Arc::clone(&out)),
+        );
+        (sm, out)
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_theme(
+        width: usize,
+        theme: crate::session::output::Theme,
+    ) -> (Self, Arc<Mutex<Vec<u8>>>) {
+        let out = Arc::new(Mutex::new(Vec::new()));
+        let shared_buffer = Arc::new(Mutex::new(Vec::new()));
+        let sm = Self::new_with_theme_impl(
+            width,
+            shared_buffer,
+            theme,
+            Some(Arc::clone(&out)),
+        );
         (sm, out)
     }
 
@@ -228,5 +293,44 @@ mod tests {
         let s = String::from_utf8_lossy(&buf);
         assert!(s.contains("1.") && s.contains("First"), "expected '1. First': {:?}", s);
         assert!(s.contains("2.") && s.contains("Second"), "expected '2. Second' after empty line: {:?}", s);
+    }
+
+    #[test]
+    fn stream_markdown_theme_light_produces_styled_output() {
+        let (mut sm, out) =
+            StreamMarkdown::new_for_test_with_theme(80, crate::session::output::Theme::Light);
+        sm.push_chunk("# Title\n").unwrap();
+        sm.flush().unwrap();
+        let buf = out.lock().unwrap();
+        let s = String::from_utf8_lossy(&buf);
+        assert!(!s.is_empty());
+        assert!(s.contains("Title"));
+        assert!(s.contains("\x1b["), "Light theme should emit ANSI: {:?}", s);
+    }
+
+    #[test]
+    fn stream_markdown_theme_dark_produces_styled_output() {
+        let (mut sm, out) =
+            StreamMarkdown::new_for_test_with_theme(80, crate::session::output::Theme::Dark);
+        sm.push_chunk("# Title\n").unwrap();
+        sm.flush().unwrap();
+        let buf = out.lock().unwrap();
+        let s = String::from_utf8_lossy(&buf);
+        assert!(!s.is_empty());
+        assert!(s.contains("Title"));
+        assert!(s.contains("\x1b["), "Dark theme should emit ANSI: {:?}", s);
+    }
+
+    #[test]
+    fn stream_markdown_theme_ansi_produces_styled_output() {
+        let (mut sm, out) =
+            StreamMarkdown::new_for_test_with_theme(80, crate::session::output::Theme::Ansi);
+        sm.push_chunk("# Title\n").unwrap();
+        sm.flush().unwrap();
+        let buf = out.lock().unwrap();
+        let s = String::from_utf8_lossy(&buf);
+        assert!(!s.is_empty());
+        assert!(s.contains("Title"));
+        assert!(s.contains("\x1b["), "Ansi theme should emit ANSI: {:?}", s);
     }
 }
