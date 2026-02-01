@@ -100,7 +100,13 @@ impl StreamMarkdown {
             .map(|(_, w)| w as usize)
             .unwrap_or(80);
         let shared_buffer = Arc::new(Mutex::new(Vec::new()));
-        Self::new_with_theme_impl(width, shared_buffer, theme, #[cfg(test)] None)
+        Self::new_with_theme_impl(
+            width,
+            shared_buffer,
+            theme,
+            #[cfg(test)]
+            None,
+        )
     }
 
     #[cfg(test)]
@@ -108,12 +114,7 @@ impl StreamMarkdown {
         let out = Arc::new(Mutex::new(Vec::new()));
         let shared_buffer = Arc::new(Mutex::new(Vec::new()));
         let theme = crate::session::output::get_theme();
-        let sm = Self::new_with_theme_impl(
-            width,
-            shared_buffer,
-            theme,
-            Some(Arc::clone(&out)),
-        );
+        let sm = Self::new_with_theme_impl(width, shared_buffer, theme, Some(Arc::clone(&out)));
         (sm, out)
     }
 
@@ -124,12 +125,7 @@ impl StreamMarkdown {
     ) -> (Self, Arc<Mutex<Vec<u8>>>) {
         let out = Arc::new(Mutex::new(Vec::new()));
         let shared_buffer = Arc::new(Mutex::new(Vec::new()));
-        let sm = Self::new_with_theme_impl(
-            width,
-            shared_buffer,
-            theme,
-            Some(Arc::clone(&out)),
-        );
+        let sm = Self::new_with_theme_impl(width, shared_buffer, theme, Some(Arc::clone(&out)));
         (sm, out)
     }
 
@@ -244,9 +240,21 @@ mod tests {
         sm.flush().unwrap();
         let buf = out.lock().unwrap();
         let s = String::from_utf8_lossy(&buf);
-        assert!(s.contains("1.") && s.contains("First"), "expected '1. First': {:?}", s);
-        assert!(s.contains("2.") && s.contains("Second"), "expected '2. Second': {:?}", s);
-        assert!(s.contains("3.") && s.contains("Third"), "expected '3. Third': {:?}", s);
+        assert!(
+            s.contains("1.") && s.contains("First"),
+            "expected '1. First': {:?}",
+            s
+        );
+        assert!(
+            s.contains("2.") && s.contains("Second"),
+            "expected '2. Second': {:?}",
+            s
+        );
+        assert!(
+            s.contains("3.") && s.contains("Third"),
+            "expected '3. Third': {:?}",
+            s
+        );
     }
 
     #[test]
@@ -259,9 +267,21 @@ mod tests {
         sm.flush().unwrap();
         let buf = out.lock().unwrap();
         let s = String::from_utf8_lossy(&buf);
-        assert!(s.contains("1.") && s.contains("First"), "expected '1. First': {:?}", s);
-        assert!(s.contains("2.") && s.contains("Second"), "expected '2. Second' after nested: {:?}", s);
-        assert!(s.contains("3.") && s.contains("Third"), "expected '3. Third': {:?}", s);
+        assert!(
+            s.contains("1.") && s.contains("First"),
+            "expected '1. First': {:?}",
+            s
+        );
+        assert!(
+            s.contains("2.") && s.contains("Second"),
+            "expected '2. Second' after nested: {:?}",
+            s
+        );
+        assert!(
+            s.contains("3.") && s.contains("Third"),
+            "expected '3. Third': {:?}",
+            s
+        );
     }
 
     /// Same as user scenario: model outputs "1." for every top-level item, with nested bullets in between.
@@ -277,9 +297,21 @@ mod tests {
         sm.flush().unwrap();
         let buf = out.lock().unwrap();
         let s = String::from_utf8_lossy(&buf);
-        assert!(s.contains("1.") && s.contains("SACAgent"), "expected '1. SACAgent': {:?}", s);
-        assert!(s.contains("2.") && s.contains("SACTrainingAgent"), "expected '2. SACTrainingAgent': {:?}", s);
-        assert!(s.contains("3.") && s.contains("SACTradingEnvironment"), "expected '3. SACTradingEnvironment': {:?}", s);
+        assert!(
+            s.contains("1.") && s.contains("SACAgent"),
+            "expected '1. SACAgent': {:?}",
+            s
+        );
+        assert!(
+            s.contains("2.") && s.contains("SACTrainingAgent"),
+            "expected '2. SACTrainingAgent': {:?}",
+            s
+        );
+        assert!(
+            s.contains("3.") && s.contains("SACTradingEnvironment"),
+            "expected '3. SACTradingEnvironment': {:?}",
+            s
+        );
     }
 
     #[test]
@@ -291,8 +323,16 @@ mod tests {
         sm.flush().unwrap();
         let buf = out.lock().unwrap();
         let s = String::from_utf8_lossy(&buf);
-        assert!(s.contains("1.") && s.contains("First"), "expected '1. First': {:?}", s);
-        assert!(s.contains("2.") && s.contains("Second"), "expected '2. Second' after empty line: {:?}", s);
+        assert!(
+            s.contains("1.") && s.contains("First"),
+            "expected '1. First': {:?}",
+            s
+        );
+        assert!(
+            s.contains("2.") && s.contains("Second"),
+            "expected '2. Second' after empty line: {:?}",
+            s
+        );
     }
 
     #[test]
