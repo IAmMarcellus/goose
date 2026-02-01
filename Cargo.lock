@@ -1789,6 +1789,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
+name = "crossterm"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
+dependencies = [
+ "bitflags 2.10.0",
+ "crossterm_winapi",
+ "mio",
+ "parking_lot",
+ "rustix 0.38.44",
+ "signal-hook",
+ "signal-hook-mio",
+ "winapi",
+]
+
+[[package]]
+name = "crossterm_winapi"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acdd7c62a3665c7f6830a51635d9ac9b23ed385797f70a83bb8bafe9c572ab2b"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2089,6 +2114,15 @@ dependencies = [
  "const-oid",
  "crypto-common",
  "subtle",
+]
+
+[[package]]
+name = "directories"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a49173b84e034382284f27f1af4dcbbd231ffa358c0fe316541a7337f376a35"
+dependencies = [
+ "dirs-sys 0.4.1",
 ]
 
 [[package]]
@@ -3060,6 +3094,8 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "shlex",
+ "streamdown-parser",
+ "streamdown-render",
  "tar",
  "tempfile",
  "tokio",
@@ -4378,6 +4414,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a69bcab0ad47271a0234d9422b131806bf3968021e5dc9328caf2d4cd58557fc"
 dependencies = [
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -6808,6 +6845,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "signal-hook"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
+
+[[package]]
+name = "signal-hook-mio"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b75a19a7a740b25bc7944bdee6172368f988763b744e3d4dfe753f6b4ece40cc"
+dependencies = [
+ "libc",
+ "mio",
+ "signal-hook",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7173,6 +7231,80 @@ name = "std_prelude"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8207e78455ffdf55661170876f88daf85356e4edd54e0a3dbc79586ca1e50cbe"
+
+[[package]]
+name = "streamdown-ansi"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b531065f2b41df7eec21d4d883613108937aacad539827730bc7a58a552b8f7"
+dependencies = [
+ "crossterm",
+ "regex",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "streamdown-config"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37c580c9a4155f2ba6b49f371c7d7a9796d2ca428b1b3166884a97dca90127b1"
+dependencies = [
+ "crossterm",
+ "directories",
+ "serde",
+ "streamdown-ansi",
+ "streamdown-core",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "streamdown-core"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4b0eaa964712369925867b0f17b0a27e54625df4c79bbc4d6a38390d523d863"
+dependencies = [
+ "regex",
+ "serde",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "streamdown-parser"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e3b0878c68d83203d3bad30483ba82843889d037334a4911289e6f5c623caaf"
+dependencies = [
+ "regex",
+ "streamdown-ansi",
+ "streamdown-core",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "streamdown-render"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3942fdad6853e4fa84d1ee3de9a6fd7439f39b9827b1fa676ae0d43c866d6ea"
+dependencies = [
+ "base64 0.22.1",
+ "crossterm",
+ "streamdown-ansi",
+ "streamdown-config",
+ "streamdown-core",
+ "streamdown-parser",
+ "streamdown-syntax",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "streamdown-syntax"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba552198fe459c0ef2d47be5bf7270770ddc6e6119cf54b67f6897c3cf1cea1e"
+dependencies = [
+ "streamdown-core",
+ "syntect",
+]
 
 [[package]]
 name = "stringprep"

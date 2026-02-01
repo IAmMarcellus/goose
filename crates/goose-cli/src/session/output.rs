@@ -8,7 +8,7 @@ use goose::conversation::message::{
 use goose::providers::canonical::maybe_get_canonical_model;
 use goose::utils::safe_truncate;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rmcp::model::{CallToolRequestParams, JsonObject, PromptArgument};
+use rmcp::model::{CallToolRequestParams, JsonObject, PromptArgument, Role};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -18,6 +18,39 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const DEFAULT_MIN_PRIORITY: f32 = 0.0;
+
+#[derive(Default)]
+pub struct RenderContext {
+    request_id_to_tool_name: HashMap<String, String>,
+}
+
+impl RenderContext {
+    pub fn from_messages(messages: &[Message]) -> Self {
+        let mut request_id_to_tool_name = HashMap::new();
+        for message in messages {
+            for content in &message.content {
+                if let MessageContent::ToolRequest(req) = content {
+                    if let Ok(call) = &req.tool_call {
+                        request_id_to_tool_name.insert(req.id.clone(), call.name.to_string());
+                    }
+                }
+            }
+        }
+        Self {
+            request_id_to_tool_name,
+        }
+    }
+
+    pub fn add_tool_request(&mut self, request_id: String, tool_name: String) {
+        self.request_id_to_tool_name.insert(request_id, tool_name);
+    }
+
+    pub fn tool_name_for_request_id(&self, request_id: &str) -> Option<&str> {
+        self.request_id_to_tool_name
+            .get(request_id)
+            .map(String::as_str)
+    }
+}
 
 // Re-export theme for use in main
 #[derive(Clone, Copy)]
@@ -203,8 +236,45 @@ pub fn set_thinking_message(s: &String) {
     }
 }
 
-pub fn render_message(message: &Message, debug: bool) {
+fn show_separators() -> bool {
+    std::env::var("GOOSE_CLI_SHOW_SEPARATORS").is_ok()
+        || Config::global()
+            .get_param::<bool>("GOOSE_CLI_SHOW_SEPARATORS")
+            .unwrap_or(false)
+}
+
+fn show_turns() -> bool {
+    std::env::var("GOOSE_CLI_SHOW_TURNS").is_ok()
+        || Config::global()
+            .get_param::<bool>("GOOSE_CLI_SHOW_TURNS")
+            .unwrap_or(false)
+}
+
+pub fn print_turn_label(turn: u32) {
+    if show_turns() && std::io::stdout().is_terminal() {
+        println!("\n{}", style(format!("Turn {}:", turn)).dim());
+    }
+}
+
+pub fn print_section_separator() {
+    if std::io::stdout().is_terminal() {
+        println!("\n{}", style("────────").dim());
+    }
+}
+
+pub fn render_message(message: &Message, debug: bool, context: Option<&RenderContext>) {
     let theme = get_theme();
+
+    if std::io::stdout().is_terminal() {
+        if message.role == Role::Assistant && show_separators() {
+            print_section_separator();
+        }
+        let role_label = match message.role {
+            Role::User => style("You:").cyan().dim(),
+            Role::Assistant => style("Assistant:").green().dim(),
+        };
+        println!("\n{}", role_label);
+    }
 
     for content in &message.content {
         match content {
@@ -221,7 +291,7 @@ pub fn render_message(message: &Message, debug: bool) {
             },
             MessageContent::Text(text) => print_markdown(&text.text, theme),
             MessageContent::ToolRequest(req) => render_tool_request(req, theme, debug),
-            MessageContent::ToolResponse(resp) => render_tool_response(resp, theme, debug),
+            MessageContent::ToolResponse(resp) => render_tool_response(resp, theme, debug, context),
             MessageContent::Image(image) => {
                 println!("Image: [data: {}, type: {}]", image.data, image.mime_type);
             }
@@ -282,6 +352,12 @@ pub fn render_text_no_newlines(text: &str, color: Option<Color>, dim: bool) {
     print!("{}", styled_text);
 }
 
+pub fn print_stream_start() {
+    if std::io::stdout().is_terminal() {
+        println!("\n{}", style("Assistant:").green().dim());
+    }
+}
+
 pub fn print_stream_chunk(text: &str) {
     if text.is_empty() {
         return;
@@ -335,7 +411,33 @@ fn render_tool_request(req: &ToolRequest, theme: Theme, debug: bool) {
     }
 }
 
-fn render_tool_response(resp: &ToolResponse, theme: Theme, debug: bool) {
+fn print_tool_response_header(tool_name: &str) {
+    let parts: Vec<_> = tool_name.rsplit("__").collect();
+    let display = parts.first().unwrap_or(&tool_name);
+    let label = if *display == "subagent" {
+        "Subagent"
+    } else {
+        display
+    };
+    let header = format!(
+        "─── {} response ──────────────────────────",
+        style(label).magenta().dim()
+    );
+    println!();
+    println!("{}", header);
+}
+
+fn render_tool_response(
+    resp: &ToolResponse,
+    theme: Theme,
+    debug: bool,
+    context: Option<&RenderContext>,
+) {
+    let tool_name = context
+        .and_then(|ctx| ctx.tool_name_for_request_id(&resp.id))
+        .unwrap_or("tool");
+    print_tool_response_header(tool_name);
+
     let config = Config::global();
 
     match &resp.tool_result {
@@ -557,6 +659,7 @@ fn render_execute_code_request(call: &CallToolRequestParams, debug: bool) {
 }
 
 fn render_subagent_request(call: &CallToolRequestParams, debug: bool) {
+    println!("\n{}", style("Subagent prompt:").dim());
     print_tool_header(call);
 
     if let Some(args) = &call.arguments {

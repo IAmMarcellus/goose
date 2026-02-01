@@ -591,6 +591,7 @@ async fn process_message_streaming(
                     Ok(AgentEvent::ModelChange { model, mode }) => {
                         tracing::info!("Model changed to {} in {} mode", model, mode);
                     }
+                    Ok(AgentEvent::TurnStarted { .. }) => {}
                     Err(e) => {
                         error!("Error in message stream: {}", e);
                         send_error(&sender, &format!("Error: {}", e)).await;

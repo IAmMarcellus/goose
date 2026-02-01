@@ -139,6 +139,7 @@ pub enum AgentEvent {
     McpNotification((String, ServerNotification)),
     ModelChange { model: String, mode: String },
     HistoryReplaced(Conversation),
+    TurnStarted { turn: u32 },
 }
 
 impl Default for Agent {
@@ -1152,6 +1153,8 @@ impl Agent {
                     );
                     break;
                 }
+
+                yield AgentEvent::TurnStarted { turn: turns_taken };
 
                 let tool_pair_summarization_task = crate::context_mgmt::maybe_summarize_tool_pair(
                     self.provider().await?,
