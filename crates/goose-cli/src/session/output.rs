@@ -282,6 +282,18 @@ pub fn render_text_no_newlines(text: &str, color: Option<Color>, dim: bool) {
     print!("{}", styled_text);
 }
 
+pub fn print_stream_chunk(text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if !std::io::stdout().is_terminal() {
+        print!("{}", text);
+    } else {
+        print!("{}", style(text).green());
+    }
+    let _ = std::io::stdout().flush();
+}
+
 pub fn render_enter_plan_mode() {
     println!(
         "\n{} {}\n",

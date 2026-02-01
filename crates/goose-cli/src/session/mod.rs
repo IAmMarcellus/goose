@@ -930,6 +930,21 @@ impl CliSession {
         let mut progress_bars = output::McpSpinners::new();
         let cancel_token_clone = cancel_token.clone();
 
+        let is_text_mode = !is_json_mode && !is_stream_json_mode;
+        let mut streamed_text = String::new();
+        let mut had_streaming_chunks = false;
+
+        fn flush_streamed_text(streamed_text: &mut String, debug: bool, skip_render: bool) {
+            if streamed_text.is_empty() {
+                return;
+            }
+            if !skip_render {
+                let msg = Message::assistant().with_text(streamed_text.as_str());
+                output::render_message(&msg, debug);
+            }
+            streamed_text.clear();
+        }
+
         use futures::StreamExt;
         loop {
             tokio::select! {
@@ -937,6 +952,7 @@ impl CliSession {
                     match result {
                         Some(Ok(AgentEvent::Message(message))) => {
                             if let Some((id, security_prompt)) = find_tool_confirmation(&message) {
+                                flush_streamed_text(&mut streamed_text, self.debug, false);
                                 let permission = prompt_tool_confirmation(&security_prompt)?;
 
                                 if permission == Permission::Cancel {
@@ -960,6 +976,7 @@ impl CliSession {
                                     permission,
                                 }).await;
                             } else if let Some((elicitation_id, elicitation_message, schema)) = find_elicitation_request(&message) {
+                                flush_streamed_text(&mut streamed_text, self.debug, false);
                                 output::hide_thinking();
                                 let _ = progress_bars.hide();
 
@@ -1000,12 +1017,24 @@ impl CliSession {
 
                                 if is_stream_json_mode {
                                     emit_stream_event(&StreamEvent::Message { message: message.clone() });
-                                } else if !is_json_mode {
-                                    output::render_message(&message, self.debug);
+                                } else if is_text_mode {
+                                    let streaming_only = message.content.len() == 1
+                                        && matches!(message.content.first(), Some(MessageContent::Text(_)));
+                                    if streaming_only {
+                                        if let Some(MessageContent::Text(t)) = message.content.first() {
+                                            streamed_text.push_str(&t.text);
+                                            had_streaming_chunks = true;
+                                            output::print_stream_chunk(&t.text);
+                                        }
+                                    } else {
+                                        flush_streamed_text(&mut streamed_text, self.debug, false);
+                                        output::render_message(&message, self.debug);
+                                    }
                                 }
                             }
                         }
                         Some(Ok(AgentEvent::McpNotification((extension_id, notification)))) => {
+                            flush_streamed_text(&mut streamed_text, self.debug, false);
                             handle_mcp_notification(
                                 &extension_id,
                                 &notification,
@@ -1017,9 +1046,11 @@ impl CliSession {
                             );
                         }
                         Some(Ok(AgentEvent::HistoryReplaced(updated_conversation))) => {
+                            flush_streamed_text(&mut streamed_text, self.debug, false);
                             self.messages = updated_conversation;
                         }
                         Some(Ok(AgentEvent::ModelChange { model, mode })) => {
+                            flush_streamed_text(&mut streamed_text, self.debug, false);
                             if is_stream_json_mode {
                                 emit_stream_event(&StreamEvent::ModelChange { model: model.clone(), mode: mode.clone() });
                             } else if self.debug {
@@ -1027,6 +1058,7 @@ impl CliSession {
                             }
                         }
                         Some(Err(e)) => {
+                            flush_streamed_text(&mut streamed_text, self.debug, false);
                             handle_agent_error(&e, is_stream_json_mode);
                             cancel_token_clone.cancel();
                             drop(stream);
@@ -1046,6 +1078,7 @@ impl CliSession {
                     }
                 }
                 _ = cancel_token_clone.cancelled() => {
+                    flush_streamed_text(&mut streamed_text, self.debug, false);
                     drop(stream);
                     if let Err(e) = self.handle_interrupted_messages(true).await {
                         eprintln!("Error handling interruption: {}", e);
@@ -1088,6 +1121,7 @@ impl CliSession {
                 .and_then(|s| s.total_tokens);
             emit_stream_event(&StreamEvent::Complete { total_tokens });
         } else {
+            flush_streamed_text(&mut streamed_text, self.debug, had_streaming_chunks);
             println!();
         }
 

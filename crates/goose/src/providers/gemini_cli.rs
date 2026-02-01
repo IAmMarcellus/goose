@@ -439,11 +439,19 @@ impl Provider for GeminiCliProvider {
                         .unwrap_or("Unknown Gemini CLI error");
                     Err(ProviderError::RequestFailed(msg.to_string()))?;
                 }
-                if let Some(text) = value
+                let text = value
                     .get("text")
                     .and_then(|t| t.as_str())
                     .or_else(|| value.get("response").and_then(|r| r.as_str()))
-                {
+                    .or_else(|| value.get("delta").and_then(|d| d.as_str()))
+                    .or_else(|| value.get("content").and_then(|c| c.as_str()))
+                    .or_else(|| {
+                        value
+                            .get("delta")
+                            .and_then(|d| d.get("text"))
+                            .and_then(|t| t.as_str())
+                    });
+                if let Some(text) = text {
                     if !text.is_empty() {
                         let message = Message::new(
                             Role::Assistant,
