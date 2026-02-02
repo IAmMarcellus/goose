@@ -291,22 +291,38 @@ async fn load_extensions(
         )
     };
 
-    let spinner = cliclack::spinner();
-    spinner.start(get_message(&waiting_ids));
+    let use_sink = output::is_using_sink();
+    let mut spinner = if use_sink {
+        output::show_thinking();
+        output::set_thinking_message(&get_message(&waiting_ids));
+        None
+    } else {
+        let s = cliclack::spinner();
+        s.start(get_message(&waiting_ids));
+        Some(s)
+    };
 
     let mut offer_debug: Vec<(usize, anyhow::Error)> = Vec::new();
     while let Some(result) = set.join_next().await {
         match result {
             Ok((id, Ok(_))) => {
                 waiting_ids.remove(&id);
-                spinner.set_message(get_message(&waiting_ids));
+                if use_sink {
+                    output::set_thinking_message(&get_message(&waiting_ids));
+                } else if let Some(ref mut s) = spinner {
+                    s.set_message(get_message(&waiting_ids));
+                }
             }
             Ok((id, Err(e))) => offer_debug.push((id, e.into())),
             Err(e) => tracing::error!("failed to add extension: {}", e),
         }
     }
 
-    spinner.clear();
+    if use_sink {
+        output::hide_thinking();
+    } else if let Some(s) = spinner {
+        s.clear();
+    }
 
     for (id, err) in offer_debug {
         let label = extensions_to_load
@@ -616,8 +632,8 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
         session.agent.override_system_prompt(override_prompt).await;
     }
 
-    // Display session information unless in quiet mode
-    if !session_config.quiet {
+    // Display session information unless in quiet mode or using TUI sink (avoids stdout pollution)
+    if !session_config.quiet && !output::is_using_sink() {
         output::display_session_info(
             session_config.resume,
             &provider_name,
@@ -625,6 +641,33 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
             &Some(session_id),
             Some(&provider_for_display),
         );
+    } else if output::is_using_sink() {
+        let status = if let Some(lead_worker) = provider_for_display.as_lead_worker() {
+            let (lead_model, worker_model) = lead_worker.get_model_info();
+            format!(
+                "{} | provider: {} | lead: {} | worker: {}",
+                if session_config.resume {
+                    "resuming"
+                } else {
+                    "ready"
+                },
+                provider_name,
+                lead_model,
+                worker_model
+            )
+        } else {
+            format!(
+                "{} | provider: {} | model: {}",
+                if session_config.resume {
+                    "resuming"
+                } else {
+                    "ready"
+                },
+                provider_name,
+                model_name
+            )
+        };
+        output::set_session_status(&status);
     }
     session
 }

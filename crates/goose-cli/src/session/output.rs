@@ -28,6 +28,36 @@ pub trait OutputSink: Send {
     fn hide_thinking(&self);
     fn print_stream_start(&self);
     fn append_content(&self, text: &str);
+
+    /// When using a TUI sink, request tool approval via overlay instead of terminal.
+    /// Returns Some(permission) when the sink handled it; None to fall back to terminal prompt.
+    fn request_tool_approval(
+        &self,
+        _id: &str,
+        _tool_name: &str,
+        _prompt: Option<&str>,
+    ) -> Option<goose::permission::Permission> {
+        None
+    }
+
+    /// Finalize the current streaming assistant cell without appending more text.
+    fn end_stream(&self) {}
+
+    /// Push a tool request as a distinct history entry (e.g. for TUI ToolCall rendering).
+    fn push_tool_request(&self, _id: &str, _tool_name: &str, _args_preview: &str) {}
+
+    /// Push a tool response as a distinct history entry (e.g. for TUI ToolResult rendering).
+    fn push_tool_response(
+        &self,
+        _id: &str,
+        _tool_name: &str,
+        _result_preview: &str,
+        _is_error: bool,
+    ) {
+    }
+
+    /// Set session status line (e.g. provider, model) for TUI display when idle.
+    fn set_session_status(&self, _status: &str) {}
 }
 
 thread_local! {
@@ -44,7 +74,12 @@ pub fn is_using_sink() -> bool {
     OUTPUT_SINK.with(|s| s.borrow().is_some())
 }
 
-fn with_sink<F, R>(f: F) -> Option<R>
+/// Set session status line for TUI sink (provider, model, etc.). No-op when not using sink.
+pub fn set_session_status(status: &str) {
+    let _ = with_sink(|sink| sink.set_session_status(status));
+}
+
+pub(crate) fn with_sink<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&dyn OutputSink) -> R,
 {
@@ -134,20 +169,9 @@ thread_local! {
 }
 
 pub fn set_theme(theme: Theme) {
-    let config = Config::global();
-    config
-        .set_param("GOOSE_CLI_THEME", theme.as_config_string())
-        .expect("Failed to set theme");
     CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
-
     let config = Config::global();
-    let theme_str = match theme {
-        Theme::Light => "light",
-        Theme::Dark => "dark",
-        Theme::Ansi => "ansi",
-    };
-
-    if let Err(e) = config.set_param("GOOSE_CLI_THEME", theme_str) {
+    if let Err(e) = config.set_param("GOOSE_CLI_THEME", theme.as_config_string()) {
         eprintln!("Failed to save theme setting to config: {}", e);
     }
 }
@@ -283,7 +307,7 @@ pub fn is_showing_thinking() -> bool {
     THINKING.with(|t| t.borrow().is_shown())
 }
 
-pub fn set_thinking_message(s: &String) {
+pub fn set_thinking_message(s: &str) {
     if with_sink(|sink| sink.set_thinking_message(s)).is_some() {
         return;
     }
@@ -322,19 +346,80 @@ pub fn print_section_separator() {
     }
 }
 
-pub fn render_message(message: &Message, debug: bool, context: Option<&RenderContext>) {
+const SINK_PREVIEW_MAX_CHARS: usize = 500;
+
+pub fn render_message(
+    message: &Message,
+    debug: bool,
+    context: Option<&RenderContext>,
+    had_streaming_chunks: bool,
+) {
     if OUTPUT_SINK.with(|s| s.borrow().as_ref().is_some()) {
-        let md = super::export::message_to_markdown(message, false);
         with_sink(|sink| {
-            sink.append_content(&md);
-            sink.append_content("\n");
+            if had_streaming_chunks {
+                sink.end_stream();
+            }
+            let mut text_buf = String::new();
+            let flush_text = |buf: &mut String| {
+                if !buf.is_empty() {
+                    sink.append_content(&format!("{}\n\n", buf));
+                    buf.clear();
+                }
+            };
+            for (i, content) in message.content.iter().enumerate() {
+                if i == 0
+                    && had_streaming_chunks
+                    && matches!(content, MessageContent::Text(_))
+                {
+                    continue;
+                }
+                match content {
+                    MessageContent::Text(t) => {
+                        if !text_buf.is_empty() {
+                            text_buf.push_str("\n\n");
+                        }
+                        text_buf.push_str(&t.text);
+                    }
+                    MessageContent::ToolRequest(req) => {
+                        flush_text(&mut text_buf);
+                        let tool_name = req
+                            .tool_call
+                            .as_ref()
+                            .ok()
+                            .map(|c| c.name.to_string())
+                            .unwrap_or_else(|| "tool".to_string());
+                        let args_preview =
+                            safe_truncate(&super::export::tool_request_to_markdown(req, false), SINK_PREVIEW_MAX_CHARS);
+                        sink.push_tool_request(&req.id, &tool_name, &args_preview);
+                    }
+                    MessageContent::ToolResponse(resp) => {
+                        flush_text(&mut text_buf);
+                        let tool_name = context
+                            .and_then(|c| c.tool_name_for_request_id(&resp.id))
+                            .unwrap_or("tool");
+                        let result_preview = safe_truncate(
+                            &super::export::tool_response_to_markdown(resp, false),
+                            SINK_PREVIEW_MAX_CHARS,
+                        );
+                        let is_error = resp.tool_result.is_err();
+                        sink.push_tool_response(&resp.id, tool_name, &result_preview, is_error);
+                    }
+                    _ => {
+                        flush_text(&mut text_buf);
+                        let single = Message::assistant().with_content(content.clone());
+                        let md = super::export::message_to_markdown(&single, false);
+                        sink.append_content(&format!("{}\n", md));
+                    }
+                }
+            }
+            flush_text(&mut text_buf);
         });
         return;
     }
 
     let theme = get_theme();
 
-    if std::io::stdout().is_terminal() {
+    if std::io::stdout().is_terminal() && !had_streaming_chunks {
         if message.role == Role::Assistant && show_separators() {
             print_section_separator();
         }
@@ -345,7 +430,13 @@ pub fn render_message(message: &Message, debug: bool, context: Option<&RenderCon
         println!("\n{}", role_label);
     }
 
-    for content in &message.content {
+    for (i, content) in message.content.iter().enumerate() {
+        if i == 0
+            && had_streaming_chunks
+            && matches!(content, MessageContent::Text(_))
+        {
+            continue;
+        }
         match content {
             MessageContent::ActionRequired(action) => match &action.data {
                 ActionRequiredData::ToolConfirmation { tool_name, .. } => {

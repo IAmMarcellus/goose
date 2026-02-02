@@ -28,7 +28,7 @@ use goose::permission::Permission;
 use goose::permission::PermissionConfirmation;
 use goose::providers::base::Provider;
 use goose::utils::safe_truncate;
-pub use output::{set_output_sink, OutputSink};
+pub use output::{get_theme, hide_thinking, set_output_sink, set_theme, OutputSink, Theme as OutputTheme};
 
 use anyhow::{Context, Result};
 use completion::GooseCompleter;
@@ -783,6 +783,7 @@ impl CliSession {
             &Message::assistant().with_text("Chat context cleared.\n"),
             self.debug,
             None,
+            false,
         );
         Ok(())
     }
@@ -858,7 +859,7 @@ impl CliSession {
                 &[],
             )
             .await?;
-        output::render_message(&plan_response, self.debug, None);
+        output::render_message(&plan_response, self.debug, None, false);
         output::hide_thinking();
         let planner_response_type = classify_planner_response(
             &self.session_id,
@@ -990,7 +991,7 @@ impl CliSession {
             }
             if !skip_render {
                 let msg = Message::assistant().with_text(streamed_text.as_str());
-                output::render_message(&msg, debug, context);
+                output::render_message(&msg, debug, context, true);
             }
             streamed_text.clear();
         }
@@ -1004,15 +1005,40 @@ impl CliSession {
                             output::print_turn_label(turn);
                         }
                         Some(Ok(AgentEvent::Message(message))) => {
-                            if let Some((id, security_prompt)) = find_tool_confirmation(&message) {
+                            if let Some((id, tool_name, security_prompt)) =
+                                find_tool_confirmation(&message)
+                            {
                                 stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
                                 flush_streamed_text(
                                     &mut streamed_text,
                                     self.debug,
-                                    false,
+                                    had_streaming_chunks,
                                     Some(&render_context),
                                 );
-                                let permission = prompt_tool_confirmation(&security_prompt)?;
+                                if output::is_using_sink() {
+                                    output::render_message(
+                                        &message,
+                                        self.debug,
+                                        Some(&render_context),
+                                        had_streaming_chunks,
+                                    );
+                                }
+                                let permission = if output::is_using_sink() {
+                                    output::with_sink(|sink| {
+                                        sink.request_tool_approval(
+                                            &id,
+                                            &tool_name,
+                                            security_prompt.as_deref(),
+                                        )
+                                    })
+                                    .flatten()
+                                } else {
+                                    None
+                                };
+                                let permission = match permission {
+                                    Some(p) => p,
+                                    None => prompt_tool_confirmation(&security_prompt)?,
+                                };
 
                                 if permission == Permission::Cancel {
                                     output::render_text("Tool call cancelled. Returning to chat...", Some(Color::Yellow), true);
@@ -1039,7 +1065,7 @@ impl CliSession {
                                 flush_streamed_text(
                                     &mut streamed_text,
                                     self.debug,
-                                    false,
+                                    had_streaming_chunks,
                                     Some(&render_context),
                                 );
                                 output::hide_thinking();
@@ -1105,13 +1131,13 @@ impl CliSession {
                                             if !had_streaming_chunks {
                                                 output::print_stream_start();
                                                 had_streaming_chunks = true;
-                                                if stream_markdown.is_none()
-                                                    && stream_markdown::use_stream_markdown()
-                                                    && !output::is_using_sink()
-                                                {
-                                                    stream_markdown =
-                                                        Some(stream_markdown::start_stream_markdown());
-                                                }
+                                            }
+                                            if stream_markdown.is_none()
+                                                && stream_markdown::use_stream_markdown()
+                                                && !output::is_using_sink()
+                                            {
+                                                stream_markdown =
+                                                    Some(stream_markdown::start_stream_markdown());
                                             }
                                             streamed_text.push_str(&t.text);
                                             if let Some(ref h) = stream_markdown {
@@ -1125,10 +1151,15 @@ impl CliSession {
                                         flush_streamed_text(
                                             &mut streamed_text,
                                             self.debug,
-                                            false,
+                                            had_streaming_chunks,
                                             Some(&render_context),
                                         );
-                                        output::render_message(&message, self.debug, Some(&render_context));
+                                        output::render_message(
+                                            &message,
+                                            self.debug,
+                                            Some(&render_context),
+                                            had_streaming_chunks,
+                                        );
                                     }
                                 }
                             }
@@ -1138,7 +1169,7 @@ impl CliSession {
                             flush_streamed_text(
                                 &mut streamed_text,
                                 self.debug,
-                                false,
+                                had_streaming_chunks,
                                 Some(&render_context),
                             );
                             handle_mcp_notification(
@@ -1156,7 +1187,7 @@ impl CliSession {
                             flush_streamed_text(
                                 &mut streamed_text,
                                 self.debug,
-                                false,
+                                had_streaming_chunks,
                                 Some(&render_context),
                             );
                             self.messages = updated_conversation;
@@ -1166,7 +1197,7 @@ impl CliSession {
                             flush_streamed_text(
                                 &mut streamed_text,
                                 self.debug,
-                                false,
+                                had_streaming_chunks,
                                 Some(&render_context),
                             );
                             if is_stream_json_mode {
@@ -1180,7 +1211,7 @@ impl CliSession {
                             flush_streamed_text(
                                 &mut streamed_text,
                                 self.debug,
-                                false,
+                                had_streaming_chunks,
                                 Some(&render_context),
                             );
                             handle_agent_error(&e, is_stream_json_mode);
@@ -1206,7 +1237,7 @@ impl CliSession {
                     flush_streamed_text(
                         &mut streamed_text,
                         self.debug,
-                        false,
+                        had_streaming_chunks,
                         Some(&render_context),
                     );
                     drop(stream);
@@ -1245,6 +1276,16 @@ impl CliSession {
             };
             println!("{}", serde_json::to_string_pretty(&json_output)?);
         } else if is_stream_json_mode {
+            stream_markdown::flush_and_drop_handle(&mut stream_markdown).await;
+            flush_streamed_text(
+                &mut streamed_text,
+                self.debug,
+                had_streaming_chunks,
+                Some(&render_context),
+            );
+            if output::is_using_sink() && had_streaming_chunks {
+                output::with_sink(|sink| sink.end_stream());
+            }
             let total_tokens = self
                 .agent
                 .config
@@ -1262,6 +1303,9 @@ impl CliSession {
                 had_streaming_chunks,
                 Some(&render_context),
             );
+            if output::is_using_sink() && had_streaming_chunks {
+                output::with_sink(|sink| sink.end_stream());
+            }
             println!();
         }
 
@@ -1323,7 +1367,12 @@ impl CliSession {
                 last_tool_name
             );
             self.push_message(Message::assistant().with_text(&prompt));
-            output::render_message(&Message::assistant().with_text(&prompt), self.debug, None);
+            output::render_message(
+                &Message::assistant().with_text(&prompt),
+                self.debug,
+                None,
+                false,
+            );
         } else {
             // An interruption occurred outside of a tool request-response.
             if let Some(last_msg) = self.messages.last() {
@@ -1337,6 +1386,7 @@ impl CliSession {
                                 &Message::assistant().with_text(prompt),
                                 self.debug,
                                 None,
+                                false,
                             );
                         }
                         Some(_) => {
@@ -1347,6 +1397,7 @@ impl CliSession {
                                 &Message::assistant().with_text(prompt),
                                 self.debug,
                                 None,
+                                false,
                             );
                         }
                         None => panic!("No content in last message"),
@@ -1418,7 +1469,7 @@ impl CliSession {
         // Render each message
         let context = output::RenderContext::from_messages(self.messages.messages());
         for message in self.messages.iter() {
-            output::render_message(message, self.debug, Some(&context));
+            output::render_message(message, self.debug, Some(&context), false);
         }
 
         // Add a visual separator after restored messages
@@ -1526,7 +1577,7 @@ impl CliSession {
                         }
 
                         if msg.role == rmcp::model::Role::User {
-                            output::render_message(&msg, self.debug, None);
+                            output::render_message(&msg, self.debug, None, false);
                         }
                         self.push_message(msg);
                     }
@@ -1661,11 +1712,17 @@ fn prompt_tool_confirmation(security_prompt: &Option<String>) -> Result<Permissi
 }
 
 /// Extract tool confirmation request from a message
-fn find_tool_confirmation(message: &Message) -> Option<(String, Option<String>)> {
+fn find_tool_confirmation(message: &Message) -> Option<(String, String, Option<String>)> {
     message.content.iter().find_map(|content| {
         if let MessageContent::ActionRequired(action) = content {
-            if let ActionRequiredData::ToolConfirmation { id, prompt, .. } = &action.data {
-                return Some((id.clone(), prompt.clone()));
+            if let ActionRequiredData::ToolConfirmation {
+                id,
+                tool_name,
+                prompt,
+                ..
+            } = &action.data
+            {
+                return Some((id.clone(), tool_name.clone(), prompt.clone()));
             }
         }
         None
@@ -1848,7 +1905,7 @@ fn display_log_notification(
             }
         }
     } else if output::is_showing_thinking() {
-        output::set_thinking_message(&formatted_message.to_string());
+        output::set_thinking_message(formatted_message);
     } else {
         progress_bars.log(formatted_message);
     }

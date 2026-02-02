@@ -42,7 +42,9 @@ cd ui/desktop && npm test    # test UI
 ### TUI (goose-tui)
 ```bash
 cargo run -p goose-cli-tui   # run ratatui streaming UI (requires TTY)
+cargo test -p goose-cli-tui # TUI + history tests
 ```
+Cell-based history (user, assistant, tool call/result, thinking, diff). Overlays: **Ctrl+T** theme picker (Dark/Light/Ansi), **Ctrl+S** settings (model, theme, approval from config). Tool approval: when a tool confirmation appears, **Y** Approve, **N** Deny, **Esc** Cancel. Scroll: **↑/↓** line, **PgUp/PgDn** page, **Home** top, **End** bottom.
 
 ## Structure
 ```

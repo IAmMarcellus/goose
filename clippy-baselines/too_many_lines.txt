@@ -5,6 +5,10 @@ crates/goose-cli/src/commands/project.rs::handle_projects_interactive
 crates/goose-cli/src/session/builder.rs::build_session
 crates/goose-cli/src/session/export.rs::tool_response_to_markdown
 crates/goose-cli/src/session/mod.rs::process_agent_response
+crates/goose-cli-tui/src/app.rs::record_to_text
+crates/goose-cli-tui/src/content_render.rs::markdown_to_text
+crates/goose-cli-tui/src/history/state.rs::apply_event
+crates/goose-cli-tui/src/main.rs::run_tui_loop
 crates/goose-mcp/src/computercontroller/mod.rs::new
 crates/goose-mcp/src/computercontroller/pdf_tool.rs::pdf_tool
 crates/goose-mcp/src/memory/mod.rs::new

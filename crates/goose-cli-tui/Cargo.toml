@@ -23,3 +23,7 @@ tokio-util = "0.7"
 tracing = { workspace = true }
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
+pulldown-cmark = "0.11"
+syntect = "5.3"
+unicode-segmentation = "1.12"
+unicode-width = "0.1"
